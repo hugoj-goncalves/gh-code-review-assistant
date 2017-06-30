@@ -2,16 +2,17 @@
 // @name            GitHub code review assistant
 // @description     Collapse & expand files one by one on diffs and mark them as reviewed. Useful to review commits with lots of files changed.
 // @icon            https://github.com/favicon.ico
-// @version         1.1.0.20160315
+// @version         1.1.1.20170630
 // @namespace       http://jakub-g.github.com/
 // @author          http://jakub-g.github.com/
+// @contributor     https://github.com/hugojg/ - Hugo José Gonçalves
 // @downloadURL     https://raw.githubusercontent.com/jakub-g/gh-code-review-assistant/master/ghAssistant.user.js
 // @updateURL       https://raw.githubusercontent.com/jakub-g/gh-code-review-assistant/master/ghAssistant.meta.js
 // @userscriptsOrg  http://userscripts.org/scripts/show/153049
 // @grant           GM_getValue
 // @grant           GM_setValue
 // @include         https://github.com/*/*/commit/*
-// @include         https://github.com/*/*/pull/*
+// @include         https://github.com/*/*/pull/*/files*
 // @include         https://github.com/*/*/compare/*
 // ==/UserScript==
 
@@ -152,11 +153,32 @@ gha.DomReader = {};
  */
 gha.DomReader.getDiffContainers = function() {
     var mainDiffDiv = document.getElementById('files');
+    if (!mainDiffDiv) return [];
     var files = [].filter.call(mainDiffDiv.children, function (elm) {
         return elm.nodeName == "DIV" && elm.classList.contains('file'); // elm.id.match(/^diff\-/);
     });
-    return files;
+
+    var progressiveFiles = [];
+    var progressiveContainer = document.querySelectorAll('.js-diff-progressive-container');
+    for (var i = 0; i < progressiveContainer.length; i++) {
+        var containerFiles = hjgGetProgressiveDiffContainers(progressiveContainer[i]);
+        progressiveFiles = progressiveFiles.concat(containerFiles);
+    }
+
+    return files.concat(progressiveFiles);
 };
+
+function hjgGetProgressiveDiffContainers(target) {
+    if (!target) return [];
+    var files = [].filter.call(target.children, function (elm) {
+        return elm.nodeName == "DIV" && elm.classList.contains('file'); // elm.id.match(/^diff\-/);
+    });
+    var progressiveContainer = undefined;
+    if (!progressiveContainer) return files;
+
+    var recur = hjgGetProgressiveDiffContainers(progressiveContainer);
+    return files.concat(recur);
+}
 
 /**
  * How many files are there in current commit / pull request
@@ -179,6 +201,11 @@ gha.DomWriter.ghaReviewButtonClassNameBase = 'ghaFileState';
 gha.DomWriter.attachGlobalCss = function () {
     var css = [];
 
+    // Custom
+    //css.push('.container.new-discussion-timeline:has(a.selected[href$=files]) {width: 97%;})');
+    css.push('.container.new-discussion-timeline {width: 97%;})');
+    // End Custom
+
     css.push('.floatLeft {float:left;}');
     css.push('.floatRight {float:right;}');
 
@@ -188,7 +215,7 @@ gha.DomWriter.attachGlobalCss = function () {
         background-image:   linear-gradient(to bottom, #fafafa, #eaeaea) !important;\
     }');
     css.push('.ghaFileStateOk {\
-        background-image:   linear-gradient(to bottom, #333, #444) !important;\
+        background-image:   linear-gradient(to bottom, #60D444, #004813) !important;\
         text-shadow: none !important;\
     }');
     css.push('.ghaFileStateFail {\
@@ -395,17 +422,19 @@ gha.DomWriter._attachClickListenersToChild = function (diffContainer) {
  * Add buttons that collapse/expand all the diffs on the current page.
  */
 gha.DomWriter.attachCollapseExpandDiffsButton = function (hiddenByDefault) {
-    var buttonBarContainer = document.querySelector('.pr-toolbar.js-sticky-offset-scroll').firstElementChild;
+    var buttonBarContainer = document.querySelector('.pr-toolbar.js-sticky-offset-scroll:not(.is-placeholder)').firstElementChild;
     var refElement = buttonBarContainer.children[2]; //querySelector('.right');
 
     var btn = document.createElement('a');
     btn.id = 'ghaToggleCollapseExpand';
     btn.className = 'btn btn-sm right';
     btn.tabIndex = 0;
-    btn.href = 'javascript:void(0);';
+    btn.href = '#';
 
     var nowVisible = 1 - hiddenByDefault; // closure to keep state; boolean to int conversion
     btn.addEventListener('click', function(evt) {
+        evt.preventDefault();
+
         // change the state between 0:all hidden, 1:all visible, 2:unreviewed visible
         if (nowVisible === 0) {
             nowVisible = 2;
@@ -430,13 +459,19 @@ gha.DomWriter.attachCollapseExpandDiffsButton = function (hiddenByDefault) {
  * for each of the files on the diff list.
  */
 gha.DomWriter.attachPerDiffFileFeatures = function () {
-
     var mainDiffDiv = document.getElementById('files');
     var children = mainDiffDiv.children;
-    var nbOfCommits = children.length;
 
-    for(var i=0, ii = nbOfCommits; i<ii; i++) {
-        var child = children[i];
+    hjgAttachPerDiffFileFeatures(children);
+};
+
+function hjgAttachPerDiffFileFeatures(target) {
+    var tLen = target.length;
+
+    for(var i=0, ii = tLen; i<ii; i++) {
+        var child = target[i];
+        if (child.classList.contains("js-diff-progressive-container"))
+            hjgAttachPerDiffFileFeatures(child.children);
         if(!child.id) {
             continue;
         }
@@ -449,10 +484,10 @@ gha.DomWriter.attachPerDiffFileFeatures = function () {
             gha.DomWriter._attachSidebarAndFooter(child);
         }
     }
-};
+}
 
 gha.DomWriter.makeFileNameKeyboardAccessible = function (child) {
-    var fileNameSpan = child.querySelector('.file-info > .user-select-contain');
+    var fileNameSpan = child.querySelector('.file-info');
     // turns out getting parent is impossible after changing outerHTML, let's do it now
     var diffContainerBody = fileNameSpan.parentNode.parentNode.parentNode.children[1];
     fileNameSpan.className += ' ghaFileNameSpan';
@@ -465,7 +500,7 @@ gha.DomWriter.makeFileNameKeyboardAccessible = function (child) {
 
     // Firefox bug (or feature): after writing to outerHTML, can't use the handle to 'fileNameSpan' to write 'href';
     // it's discarded, probably the browser still think it's a span
-    child.querySelector('.ghaFileNameSpan').href = 'javascript:void(0);';
+    child.querySelector('.ghaFileNameSpan').href = '#';
 
     // Ok, now we're keyboard-reachable, let's add an event listener then which shows/hides the diff
     var handler = gha.ClickHandlers.createToggleDisplayHandler(diffContainerBody, true);
@@ -480,7 +515,7 @@ gha.DomWriter._attachReviewStatusButton = function (diffContainer, text /*also c
     var newButton = document.createElement('a');
     newButton.className = 'btn btn-sm ghaToggleFileState ghaToggleFileState' + (text == L10N.ok ? 'Ok' : 'Fail');
 
-    newButton.href = "javascript:void(0)"; // crucial to make it launchable from keyboard
+    newButton.href = "#"; // crucial to make it launchable from keyboard
     newButton.tabIndex = 0;
     newButton.innerHTML = text;
     newButton.addEventListener('click', gha.ClickHandlers.createReviewButtonHandler(text, diffContainer));
@@ -742,9 +777,10 @@ gha.DomWriter.createGHACfgDialog = function () {
     var cfgDiv = makeDiv("ghaDialogCenter");
 
     var closeBtn = makeElem("a","ghaDialogCloseBtn");
-    closeBtn.href = "javascript:void(0);";
+    closeBtn.href = "#";
     closeBtn.innerHTML = 'X';
-    closeBtn.addEventListener('click', function () {
+    closeBtn.addEventListener('click', function (evt) {
+        evt.preventDefault();
         wrapperDiv.style.display = 'none';
     });
     cfgDiv.appendChild(closeBtn);
@@ -1010,6 +1046,8 @@ gha.ClickHandlers = {};
  */
 gha.ClickHandlers.createToggleDisplayHandler = function(elem, bStrictTarget) {
     return function(evt){
+        evt.preventDefault();
+
         if(bStrictTarget){
             if (evt.currentTarget != evt.target) {
                 // don't want to trigger the event when clicking on "View file" or "Show comment"
@@ -1028,6 +1066,7 @@ gha.ClickHandlers.createToggleDisplayHandler = function(elem, bStrictTarget) {
 
 gha.ClickHandlers.createReviewButtonHandler = function (text, diffContainer) {
     return function(evt) {
+        evt.preventDefault();
 
         var diffContainerHeader = diffContainer.children[0]; // .meta
         var diffContainerBody = diffContainer.children[1];   // .data
@@ -1329,4 +1368,39 @@ var main = function () {
     // gha.DomWriter.enableEditing();
 };
 
-main();
+function hjgObserverProgressive(target) {
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.addedNodes.length > 0) {
+                var progressiveContainer = target.querySelector('.js-diff-progressive-container');
+                if (progressiveContainer)
+                    hjgObserverProgressive(progressiveContainer);
+                else
+                    main();
+                observer.disconnect();
+            }
+        });
+    });
+
+    var config = { attributes: false, childList: true, characterData: false };
+
+    observer.observe(target, config);
+    return observer;
+}
+
+function hjgPreMain() {
+    debugger;
+    var progressiveContainer = document.querySelectorAll('.js-diff-progressive-container');
+    var observerList = [];
+    for (var i = 0; i < progressiveContainer.length; i++) {
+        observerList.push(hjgObserverProgressive(progressiveContainer[i]));
+    }
+    if (!progressiveContainer.length || (progressiveContainer.length == 1 && progressiveContainer[0].querySelectorAll("[id^=diff-].file").length > 0)) {
+        for (var i = 0; i < observerList.length; i++)
+            observerList[i].disconnect();
+
+        main();
+    }
+}
+
+hjgPreMain();

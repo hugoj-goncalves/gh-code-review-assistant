@@ -80,3 +80,5 @@
 //  Fixed selectors for some class changes that Github made
 // 1.1.0.20160315
 //  Fixed selectors for some class changes that Github made
+// 1.1.1.20170630
+//  Fixed to work with github now that it acts like a single page app
